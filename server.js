@@ -1,212 +1,194 @@
-﻿import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import path from "path";
-import { fileURLToPath } from "url";
-import pkg from "pg";
+require("dotenv").config();
 
-const { Pool } = pkg;
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ===== Config =====
-const PORT             = process.env.PORT || 8080;
-const ATTENDANT_TOKEN  = process.env.ATTENDANT_TOKEN || "scan-XYZ123";
-const ADMIN_TOKEN      = process.env.ADMIN_TOKEN || "admin-XYZ123";
-const EVENT_ID_DEFAULT = process.env.EVENT_ID_DEFAULT || "MF2025";
-const DATABASE_URL     = process.env.DATABASE_URL;
-
-if (!DATABASE_URL) {
-  console.error("Falta DATABASE_URL");
-  process.exit(1);
-}
-
-const pool = new Pool({ connectionString: DATABASE_URL });
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const compression = require("compression");
+const { RateLimiterMemory } = require("rate-limiter-flexible");
+const path = require("path");
+const { Pool } = require("pg");
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.set("trust proxy", true);
 
-// Servir tu web (móvil + admin) desde /public
-app.use(express.static(path.join(__dirname, "public")));
+// --- Config ---
+const PORT = process.env.PORT || 3000;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
+const ATTENDANT_TOKEN = process.env.ATTENDANT_TOKEN || "scan-XYZ123";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "admin-ABC999";
+const DATABASE_URL = process.env.DATABASE_URL;
 
-// ===== Bootstrap DB (crea tablas si no existen) =====
-const bootstrapSQL = `
-CREATE TABLE IF NOT EXISTS scans (
-  id BIGSERIAL PRIMARY KEY,
-  event_id TEXT NOT NULL,
-  code TEXT NOT NULL,
-  raw TEXT,
-  user_agent TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS checkins (
-  id BIGSERIAL PRIMARY KEY,
-  event_id TEXT NOT NULL,
-  code TEXT NOT NULL,
-  first_scan_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (event_id, code)
-);`;
+// --- Seguridad y básicos ---
+app.use(helmet());
+app.use(compression());
+app.use(cors({ origin: CORS_ORIGIN === "*" ? true : CORS_ORIGIN, credentials: false }));
+app.use(express.json({ limit: "1mb" }));
 
-async function bootstrap() {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(bootstrapSQL);
-    await client.query("COMMIT");
-    console.log("Tablas OK");
-  } catch (e) {
-    await client.query("ROLLBACK");
-    console.error("Error bootstrap:", e);
+// --- Pool PostgreSQL (Neon) ---
+if (!DATABASE_URL) {
+  console.error("Falta DATABASE_URL en .env");
+  process.exit(1);
+}
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, // Neon requiere SSL
+});
+
+// Comprobación de conexión al arrancar
+pool
+  .connect()
+  .then((c) => c.release())
+  .then(() => console.log("✅ Conectado a Neon"))
+  .catch((err) => {
+    console.error("❌ Error conectando a Neon:", err.message);
     process.exit(1);
-  } finally {
-    client.release();
-  }
-}
-
-// ===== Utilidades =====
-function bearer(req) {
-  const h = req.headers.authorization || "";
-  const m = h.match(/^Bearer (.+)$/i);
-  return m ? m[1] : null;
-}
-function requireToken(req, res, expected) {
-  const tok = bearer(req);
-  if (!tok || tok !== expected) {
-    res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-    return true;
-  }
-  return false;
-}
-
-// ===== SSE para admin =====
-const sseClients = new Set();
-app.get("/admin/stream", (req, res) => {
-  if (requireToken(req, res, ADMIN_TOKEN)) return;
-
-  res.set({
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    "Connection": "keep-alive"
   });
-  res.flushHeaders();
-  res.write(`event: ping\ndata: ok\n\n`);
 
-  const client = { res };
-  sseClients.add(client);
-  req.on("close", () => sseClients.delete(client));
-});
+// --- Rate limit para /api/checkin (por IP) ---
+const limiter = new RateLimiterMemory({ points: 10, duration: 5 }); // 10 req / 5s
+const rateLimitCheckin = async (req, res, next) => {
+  try {
+    await limiter.consume(req.ip || req.headers["x-forwarded-for"] || "unknown");
+    next();
+  } catch {
+    res.status(429).json({ ok: false, error: "RATE_LIMITED" });
+  }
+};
 
-function sseBroadcast(event, payload) {
-  const data = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-  for (const c of sseClients) {
-    try { c.res.write(data); } catch {}
+// --- Helpers de auth ---
+function getBearer(req) {
+  const h = req.headers["authorization"] || "";
+  const [, token] = h.split(" ");
+  return token || "";
+}
+function requireAttendant(req, res, next) {
+  const token = getBearer(req);
+  if (token !== ATTENDANT_TOKEN)
+    return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  next();
+}
+function requireAdmin(req, res, next) {
+  const token = getBearer(req);
+  if (token !== ADMIN_TOKEN)
+    return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  next();
+}
+
+// --- Admin: SSE ---
+/** @type {Set<import("http").ServerResponse>} */
+const sseClients = new Set();
+function broadcastSSE(payload) {
+  const data = `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(data);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
-// ===== API =====
-
-// 1) Check-in desde el móvil (azafato)
-app.post("/api/checkin", async (req, res) => {
-  if (requireToken(req, res, ATTENDANT_TOKEN)) return;
-
-  const { code, eventId, raw } = req.body || {};
-  const event_id = (eventId || EVENT_ID_DEFAULT || "").trim();
-  if (!code || !event_id) {
-    return res.status(400).json({ ok: false, error: "MISSING_FIELDS" });
-  }
-
-  const ua = req.headers["user-agent"] || null;
-
-  const client = await pool.connect();
+// --- API: check-in ---
+app.post("/api/checkin", rateLimitCheckin, requireAttendant, async (req, res) => {
   try {
-    await client.query("BEGIN");
+    const { code, via } = req.body || {};
+    if (!code || typeof code !== "string") {
+      return res.status(400).json({ ok: false, error: "INVALID_CODE" });
+    }
 
-    // Histórico (siempre se guarda)
-    await client.query(
-      `INSERT INTO scans (event_id, code, raw, user_agent)
-       VALUES ($1, $2, $3, $4)`,
-      [event_id, code, raw ?? null, ua]
-    );
+    // ¿Duplicado en últimos 10 minutos?
+    const dupQ = `
+      SELECT EXISTS(
+        SELECT 1 FROM scans
+        WHERE code = $1 AND ts >= now() - interval '10 minutes'
+      ) AS is_dup
+    `;
+    const dupR = await pool.query(dupQ, [code]);
+    const isDuplicate = Boolean(dupR.rows?.[0]?.is_dup);
 
-    // Único por (event_id, code)
-    const insertCheckin = await client.query(
-      `INSERT INTO checkins (event_id, code)
-       VALUES ($1, $2)
-       ON CONFLICT (event_id, code) DO NOTHING
-       RETURNING id, first_scan_at`,
-      [event_id, code]
-    );
+    // Insertar registro
+    const insertQ = `
+      INSERT INTO scans (code, via, ip, ua)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, code, ts, via, ip, ua
+    `;
+    const ip = req.ip;
+    const ua = req.headers["user-agent"] || "";
+    const ins = await pool.query(insertQ, [code, via || "camera", ip, ua]);
+    const record = ins.rows[0];
 
-    await client.query("COMMIT");
+    // Notificar SSE a admin
+    broadcastSSE({ type: "scan", data: record, duplicate: isDuplicate });
 
-    const duplicated = insertCheckin.rowCount === 0;
-    const payload = {
-      ok: true,
-      duplicated,
-      eventId: event_id,
-      code,
-      firstSeenAt: insertCheckin.rows?.[0]?.first_scan_at || null
-    };
-
-    sseBroadcast("checkin", payload);
-    return res.json(payload);
-  } catch (e) {
-    await client.query("ROLLBACK");
-    console.error("checkin error", e);
+    return res.json({ ok: true, duplicate: isDuplicate, record });
+  } catch (err) {
+    console.error("checkin error:", err);
     return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  } finally {
-    client.release();
   }
 });
 
-// 2) Listado SCANS (histórico con duplicados)
-app.get("/admin/scans", async (req, res) => {
-  if (requireToken(req, res, ADMIN_TOKEN)) return;
-
-  const event_id = (req.query.eventId || EVENT_ID_DEFAULT || "").trim();
-  const limit = Math.min(parseInt(req.query.limit || "500", 10), 2000);
-
+// --- Admin: listado histórico ---
+// Soporta ?sinceTs= (epoch ms) y ?code= (exacto)
+app.get("/admin/scans", requireAdmin, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT id, event_id, code, raw, user_agent, created_at
-       FROM scans
-       WHERE event_id = $1
-       ORDER BY created_at DESC
-       LIMIT $2`,
-      [event_id, limit]
-    );
-    res.json({ ok: true, eventId: event_id, items: rows });
-  } catch (e) {
-    console.error("scans error", e);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
+    const sinceTs = Number(req.query.sinceTs || 0);
+    const code = (req.query.code || "").toString().trim();
+
+    const where = [];
+    const params = [];
+    let i = 1;
+
+    if (sinceTs && !Number.isNaN(sinceTs)) {
+      where.push(`ts >= to_timestamp($${i}/1000.0)`);
+      params.push(sinceTs);
+      i++;
+    }
+    if (code) {
+      where.push(`code = $${i}`);
+      params.push(code);
+      i++;
+    }
+
+    const q = `
+      SELECT id, code, ts, via, ip, ua
+      FROM scans
+      ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY id DESC
+      LIMIT 1000
+    `;
+    const r = await pool.query(q, params);
+    return res.json({ ok: true, total: r.rowCount, scans: r.rows });
+  } catch (err) {
+    console.error("admin/scans error:", err);
+    return res.status(500).json({ ok: false, error: "SERVER_ERROR" });
   }
 });
 
-// 3) Listado CHECKINS (únicos)
-app.get("/admin/checkins", async (req, res) => {
-  if (requireToken(req, res, ADMIN_TOKEN)) return;
+// --- Admin: SSE stream ---
+app.get("/admin/stream", requireAdmin, (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  res.write(`event: hello\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`);
 
-  const event_id = (req.query.eventId || EVENT_ID_DEFAULT || "").trim();
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, event_id, code, first_scan_at
-       FROM checkins
-       WHERE event_id = $1
-       ORDER BY first_scan_at DESC`,
-      [event_id]
-    );
-    res.json({ ok: true, eventId: event_id, items: rows });
-  } catch (e) {
-    console.error("checkins error", e);
-    res.status(500).json({ ok: false, error: "SERVER_ERROR" });
-  }
+  sseClients.add(res);
+  req.on("close", () => {
+    sseClients.delete(res);
+  });
 });
 
+// --- Static (frontend) ---
+app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+// --- Health ---
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
-const server = app.listen(PORT, async () => {
-  console.log(`Server on :${PORT}`);
-  await bootstrap();
+// --- Start ---
+app.listen(PORT, () => {
+  console.log(`QR Check-in escuchando en http://localhost:${PORT}`);
 });
