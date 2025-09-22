@@ -179,6 +179,11 @@ app.get("/admin/stream", requireAdmin, (req, res) => {
   });
 });
 
+
+app.use((req, res, next) => {
+  res.setHeader("Permissions-Policy", "camera=(self)");
+  next();
+});
 // --- Static (frontend) ---
 app.use(express.static(path.join(__dirname, "public"), { extensions: ["html"] }));
 app.get("/", (_req, res) => {
