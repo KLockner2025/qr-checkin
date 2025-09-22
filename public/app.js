@@ -1,8 +1,6 @@
-// Si dejas API_BASE vacío --> MODO DEMO (no envía nada, solo muestra el QR leído)
-// Cuando tengas backend (Render/Koyeb/etc.), pon aquí su URL, ej. "https://tuapp.onrender.com"
-const API_BASE = ""; 
-const SEND_ENABLED = !!API_BASE; // <-- si hay URL, envía; si no, solo demo
-
+// FRONT DEMO: si API_BASE queda vacío, solo muestra el QR y no envía nada.
+const API_BASE = "";
+const SEND_ENABLED = !!API_BASE;
 const PENDING_KEY = "checkin.pending";
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -18,7 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const attendantEl = document.getElementById('attendant');
   const attTokenEl  = document.getElementById('attToken');
 
-  let codeReader = new ZXing.BrowserMultiFormatReader();
+  let codeReader = null;
   let currentDeviceId = null;
 
   function setStatus(msg, type){ statusEl.className = 'status' + (type ? ' ' + type : ''); statusEl.textContent = msg; }
@@ -32,7 +30,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   function savePending(list){ localStorage.setItem(PENDING_KEY, JSON.stringify(list)); }
 
   async function sendCheckin(payload){
-    // Si no hay backend, no enviamos nada (modo demo)
     if (!SEND_ENABLED) throw new Error("DEMO_MODE_NO_BACKEND");
     const res = await fetch(`${API_BASE}/api/checkin`, {
       method: 'POST',
@@ -44,21 +41,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function handleScan(text){
-    const eventId   = eventIdEl.value.trim();
-    const attendant = attendantEl.value.trim();
-
+    const eventId   = (eventIdEl?.value || "").trim();
+    const attendant = (attendantEl?.value || "").trim();
     setResult(text);
 
-    // En demo no exigimos campos ni token; solo mostramos
     if (!SEND_ENABLED) { setStatus('QR leído (modo demo: no se envía).', 'ok'); return; }
-
     if (!eventId || !attendant || !attTokenEl.value.trim()) { setStatus('Completa Evento, Azafata y Token.', 'err'); return; }
 
-    const payload = {
-      eventId, code: text, attendant,
-      deviceId: await deviceId(), scannedAt: new Date().toISOString()
-    };
-
+    const payload = { eventId, code: text, attendant, deviceId: await deviceId(), scannedAt: new Date().toISOString() };
     try {
       const data = await sendCheckin(payload);
       if (data.duplicate) setStatus(`Duplicado (primera vez: ${new Date(data.firstSeenAt).toLocaleTimeString()})`, 'err');
@@ -69,40 +59,93 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  // ---------- Listar cámaras con Web API ----------
   async function listCameras() {
-    const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
-    if (!devices.length) throw new Error('No se han encontrado cámaras');
-    const byBackPref = [...devices].sort((a,b) => {
-      const la=(a.label||'').toLowerCase(), lb=(b.label||'').toLowerCase();
-      const score = s => /back|rear|environment|trasera|posterior/.test(s)?1:0;
-      return score(lb)-score(la);
+    try {
+      const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      tmp.getTracks().forEach(t => t.stop());
+    } catch {
+      throw new Error("Permiso de cámara denegado o no disponible");
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const vids = devices.filter(d => d.kind === "videoinput");
+    if (!vids.length) throw new Error("No se han encontrado cámaras");
+    vids.sort((a, b) => {
+      const sa = (a.label || "").toLowerCase(), sb = (b.label || "").toLowerCase();
+      const score = s => /back|rear|environment|trasera|posterior/.test(s) ? 1 : 0;
+      return score(sb) - score(sa);
     });
-    currentDeviceId = byBackPref[0].deviceId;
+    currentDeviceId = vids[0].deviceId;
   }
+  // ------------------------------------------------
 
   async function start() {
     try {
-      await listCameras();
-      btnStart.disabled = true; btnStop.disabled = false;
-      setStatus('Escaneando…', 'ok');
+      if (!window.ZXing || !ZXing.BrowserMultiFormatReader) {
+        throw new Error("ZXing no se ha cargado. Revisa <script src=\"https://unpkg.com/@zxing/library@0.20.0\">");
+      }
 
-      await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result, err, controls) => {
+      // Hints para forzar QR y buscar más (TRY_HARDER)
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+      codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+      await listCameras();
+
+      btnStart.disabled = true; btnStop.disabled = false;
+      setStatus('Escaneando… (acerca/aleja el QR hasta llenar ~60% de la vista)', 'ok');
+
+      // Usa constraints para mejor enfoque y resolución
+      const constraints = {
+        video: {
+          deviceId: { exact: currentDeviceId },
+          facingMode: "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        }
+      };
+
+      await codeReader.decodeFromConstraints(constraints, video, (result, err, controls) => {
         if (result) {
           const text = result.getText();
           handleScan(text);
-          // Paramos tras leer uno para evitar dobles lecturas
+          // Para evitar lecturas repetidas: paramos y dejamos que el usuario pulse Iniciar de nuevo
           controls.stop(); btnStart.disabled=false; btnStop.disabled=true;
         }
-        if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
+        if (err && !(err instanceof ZXing.NotFoundException)) {
+          console.debug(err);
+        }
       });
-    } catch (e) { btnStart.disabled=false; btnStop.disabled=true; setStatus(`Error: ${e.message||e}`, 'err'); }
+    } catch (e) {
+      btnStart.disabled=false; btnStop.disabled=true;
+      setStatus(`Error: ${e.message||e}`, 'err');
+    }
   }
+
   async function stop() {
-    try { codeReader.reset(); const ms=video.srcObject; if (ms?.getTracks) ms.getTracks().forEach(t=>t.stop()); } catch {}
+    try {
+      codeReader?.reset();
+      const ms = video.srcObject;
+      if (ms?.getTracks) ms.getTracks().forEach(t => t.stop());
+    } catch {}
     btnStart.disabled=false; btnStop.disabled=true; setStatus('Cámara detenida.');
   }
+
   btnStart.addEventListener('click', start);
   btnStop.addEventListener('click', stop);
+
+  btnSync?.addEventListener('click', async () => {
+    const pend = loadPending(); if (!pend.length) { setStatus('No hay pendientes.', 'ok'); return; }
+    let ok=0, fail=0;
+    for (const p of [...pend]) {
+      try { await sendCheckin(p); ok++; pend.shift(); savePending(pend); }
+      catch { fail++; }
+    }
+    setStatus(`Sincronización: ${ok} enviados, ${fail} fallidos.`, fail? 'err':'ok');
+  });
 
   btnCopy.addEventListener('click', async () => {
     const t = outputEl.textContent.trim(); if (!t || t==='—') return;
@@ -114,7 +157,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function deviceId(){
     const KEY='checkin.deviceId';
     let id = localStorage.getItem(KEY);
-    if (!id) { id = crypto.randomUUID(); localStorage.setItem(KEY,id); }
+    if (!id) { id = (crypto?.randomUUID?.() || Math.random().toString(36).slice(2)); localStorage.setItem(KEY,id); }
     return id;
   }
 });
