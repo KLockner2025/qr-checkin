@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Check-in QR</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>📷 Check-in QR</h1>
+      <button id="btnStart" class="accent">Iniciar cámara</button>
+      <button id="btnStop" class="danger" disabled>Detener</button>
+    </header>
+
+    <div class="card">
+      <div class="row">
+        <label class="small">Evento:</label>
+        <input id="eventId" placeholder="ej: MF2025" />
+        <label class="small">Azafata:</label>
+        <input id="attendant" placeholder="Nombre o código" />
+      </div>
+      <div class="row">
+        <label class="small">Token:</label>
+        <input id="attToken" placeholder="***" type="password" />
+        <button id="btnSync" title="Enviar pendientes">Sincronizar</button>
+      </div>
+
+      <video id="video" playsinline muted></video>
+
+      <div class="status" id="status">Listo. Pulsa <b>Iniciar cámara</b>.</div>
+      <div class="out" id="output">—</div>
+
+      <div class="row">
+        <button id="btnCopy" disabled>Copiar</button>
+        <a id="openLink" target="_blank" rel="noopener" style="display:none">
+          <button>Abrir enlace</button>
+        </a>
+      </div>
+
+      <div class="footer small">
+        Si no hay conexión, se guardan lecturas y podrás <b>Sincronizar</b> después.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
