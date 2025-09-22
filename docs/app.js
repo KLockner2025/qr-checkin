@@ -70,33 +70,57 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function listCameras() {
-    const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
-    if (!devices.length) throw new Error('No se han encontrado cámaras');
-    const byBackPref = [...devices].sort((a,b) => {
-      const la=(a.label||'').toLowerCase(), lb=(b.label||'').toLowerCase();
-      const score = s => /back|rear|environment|trasera|posterior/.test(s)?1:0;
-      return score(lb)-score(la);
-    });
-    currentDeviceId = byBackPref[0].deviceId;
+  // iOS/Android: primero pedimos permiso para que aparezcan las cámaras con etiqueta
+  try {
+    const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    // cerramos inmediatamente (solo era para desbloquear enumerateDevices)
+    tmp.getTracks().forEach(t => t.stop());
+  } catch (e) {
+    throw new Error("Permiso de cámara denegado o no disponible");
   }
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const vids = devices.filter(d => d.kind === "videoinput");
+  if (!vids.length) throw new Error("No se han encontrado cámaras");
+
+  // Prioriza la trasera por nombre
+  vids.sort((a, b) => {
+    const sa = (a.label || "").toLowerCase();
+    const sb = (b.label || "").toLowerCase();
+    const score = s => /back|rear|environment|trasera|posterior/.test(s) ? 1 : 0;
+    return score(sb) - score(sa);
+  });
+
+  currentDeviceId = vids[0].deviceId; // ← actualiza la variable global
+}
+
 
   async function start() {
-    try {
-      await listCameras();
-      btnStart.disabled = true; btnStop.disabled = false;
-      setStatus('Escaneando…', 'ok');
+  try {
+    // Comprobamos que ZXing esté cargado
+    if (!window.ZXing || !ZXing.BrowserMultiFormatReader) {
+      throw new Error("ZXing no se ha cargado. Revisa la etiqueta <script> de @zxing/library.");
+    }
 
-      await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result, err, controls) => {
-        if (result) {
-          const text = result.getText();
-          handleScan(text);
-          // Paramos tras leer uno para evitar dobles lecturas
-          controls.stop(); btnStart.disabled=false; btnStop.disabled=true;
-        }
-        if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
-      });
-    } catch (e) { btnStart.disabled=false; btnStop.disabled=true; setStatus(`Error: ${e.message||e}`, 'err'); }
+    await listCameras(); // ← usa la versión nativa que acabamos de poner
+    btnStart.disabled = true; btnStop.disabled = false;
+    setStatus('Escaneando…', 'ok');
+
+    await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result, err, controls) => {
+      if (result) {
+        const text = result.getText();
+        handleScan(text);
+        // Evitar dobles lecturas:
+        controls.stop(); btnStart.disabled=false; btnStop.disabled=true;
+      }
+      if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
+    });
+  } catch (e) {
+    btnStart.disabled=false; btnStop.disabled=true;
+    setStatus(`Error: ${e.message||e}`, 'err');
   }
+}
+
   async function stop() {
     try { codeReader.reset(); const ms=video.srcObject; if (ms?.getTracks) ms.getTracks().forEach(t=>t.stop()); } catch {}
     btnStart.disabled=false; btnStop.disabled=true; setStatus('Cámara detenida.');
