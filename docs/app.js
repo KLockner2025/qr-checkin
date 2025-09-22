@@ -1,5 +1,5 @@
 // FRONT DEMO: si API_BASE queda vacío, solo muestra el QR y no envía nada.
-const API_BASE = ""; 
+const API_BASE = "";
 const SEND_ENABLED = !!API_BASE;
 const PENDING_KEY = "checkin.pending";
 
@@ -16,7 +16,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   const attendantEl = document.getElementById('attendant');
   const attTokenEl  = document.getElementById('attToken');
 
-  // ZXing reader
   let codeReader = null;
   let currentDeviceId = null;
 
@@ -44,17 +43,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function handleScan(text){
     const eventId   = (eventIdEl?.value || "").trim();
     const attendant = (attendantEl?.value || "").trim();
-
     setResult(text);
 
     if (!SEND_ENABLED) { setStatus('QR leído (modo demo: no se envía).', 'ok'); return; }
     if (!eventId || !attendant || !attTokenEl.value.trim()) { setStatus('Completa Evento, Azafata y Token.', 'err'); return; }
 
-    const payload = {
-      eventId, code: text, attendant,
-      deviceId: await deviceId(), scannedAt: new Date().toISOString()
-    };
-
+    const payload = { eventId, code: text, attendant, deviceId: await deviceId(), scannedAt: new Date().toISOString() };
     try {
       const data = await sendCheckin(payload);
       if (data.duplicate) setStatus(`Duplicado (primera vez: ${new Date(data.firstSeenAt).toLocaleTimeString()})`, 'err');
@@ -65,52 +59,65 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // --------- LISTADO DE CÁMARAS SIN ZXING (Web API nativa) ----------
+  // ---------- Listar cámaras con Web API ----------
   async function listCameras() {
-    // Pide permiso primero para que enumerateDevices devuelva labels en iOS/Android
     try {
       const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       tmp.getTracks().forEach(t => t.stop());
-    } catch (e) {
+    } catch {
       throw new Error("Permiso de cámara denegado o no disponible");
     }
-
     const devices = await navigator.mediaDevices.enumerateDevices();
     const vids = devices.filter(d => d.kind === "videoinput");
     if (!vids.length) throw new Error("No se han encontrado cámaras");
-
-    // Prioriza trasera por nombre
     vids.sort((a, b) => {
-      const sa = (a.label || "").toLowerCase();
-      const sb = (b.label || "").toLowerCase();
+      const sa = (a.label || "").toLowerCase(), sb = (b.label || "").toLowerCase();
       const score = s => /back|rear|environment|trasera|posterior/.test(s) ? 1 : 0;
       return score(sb) - score(sa);
     });
-
     currentDeviceId = vids[0].deviceId;
   }
-  // ------------------------------------------------------------------
+  // ------------------------------------------------
 
   async function start() {
     try {
-      // Comprueba ZXing cargado
       if (!window.ZXing || !ZXing.BrowserMultiFormatReader) {
-        throw new Error("ZXing no se ha cargado. Revisa la etiqueta <script> de @zxing/library.");
+        throw new Error("ZXing no se ha cargado. Revisa <script src=\"https://unpkg.com/@zxing/library@0.20.0\">");
       }
-      codeReader = new ZXing.BrowserMultiFormatReader();
 
-      await listCameras(); // ← usamos Web API, no ZXing.listVideoInputDevices
+      // Hints para forzar QR y buscar más (TRY_HARDER)
+      const hints = new Map();
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+      codeReader = new ZXing.BrowserMultiFormatReader(hints);
+
+      await listCameras();
+
       btnStart.disabled = true; btnStop.disabled = false;
-      setStatus('Escaneando…', 'ok');
+      setStatus('Escaneando… (acerca/aleja el QR hasta llenar ~60% de la vista)', 'ok');
 
-      await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result, err, controls) => {
+      // Usa constraints para mejor enfoque y resolución
+      const constraints = {
+        video: {
+          deviceId: { exact: currentDeviceId },
+          facingMode: "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 }
+        }
+      };
+
+      await codeReader.decodeFromConstraints(constraints, video, (result, err, controls) => {
         if (result) {
           const text = result.getText();
           handleScan(text);
-          // Evitar dobles lecturas (reanuda cuando pulses de nuevo Iniciar)
+          // Para evitar lecturas repetidas: paramos y dejamos que el usuario pulse Iniciar de nuevo
           controls.stop(); btnStart.disabled=false; btnStop.disabled=true;
         }
-        if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
+        if (err && !(err instanceof ZXing.NotFoundException)) {
+          console.debug(err);
+        }
       });
     } catch (e) {
       btnStart.disabled=false; btnStop.disabled=true;
