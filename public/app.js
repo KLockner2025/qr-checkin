@@ -1,6 +1,8 @@
+// ==== CONFIGURACIÓN (Koyeb mismo origen) ====
+// Deja API_BASE vacío para mismo dominio (Express), sin CORS
 const API_BASE = "";                       
 const ATTENDANT_TOKEN = "scan-XYZ123"; // ATTENDANT_TOKEN de Koyeb
-const EVENT_ID = "MF2025";                   // Evento fijo
+const EVENT_ID = "MF2025";              // Evento fijo
 
 const PENDING_KEY = "checkin.pending";
 
@@ -13,10 +15,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusEl  = document.getElementById('status');
   const outputEl  = document.getElementById('output');
   const openLink  = document.getElementById('openLink');
-  const eventIdEl = document.getElementById('eventId'); // solo para mostrar MF2025
+  const eventIdEl = document.getElementById('eventId'); // solo muestra MF2025
 
   let codeReader = null;
   let currentDeviceId = null;
+
+  // --- NUEVO: control de bucle continuo + anti-dobles ---
+  let scanning = false;
+  let lastText = null;
+  let lastAt   = 0;
 
   function setStatus(msg, type){ statusEl.className = 'status' + (type ? ' ' + type : ''); statusEl.textContent = msg; }
   function setResult(text){
@@ -81,12 +88,43 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   // -----------------------------------------
 
+  // --- NUEVO: bucle de escaneo continuo con debounce ---
+  async function startScanLoop() {
+    if (!scanning) return;
+
+    const constraints = {
+      video: {
+        deviceId: { exact: currentDeviceId },
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 }
+      }
+    };
+
+    await codeReader.decodeFromConstraints(constraints, video, async (result, err, controls) => {
+      if (result) {
+        const text = result.getText();
+        const now = Date.now();
+        // Evita repetir el mismo código si se "ve" varias veces seguidas
+        if (text === lastText && now - lastAt < 1200) return;
+
+        lastText = text; lastAt = now;
+        await handleScan(text);
+
+        // Paramos esta sesión y reanudamos en breve
+        controls.stop();
+        if (scanning) setTimeout(() => startScanLoop(), 300);
+      }
+      if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
+    });
+  }
+
   async function start() {
     try {
       if (!window.ZXing || !ZXing.BrowserMultiFormatReader) {
-        throw new Error("ZXing no se ha cargado. Revisa <script src=\"https://unpkg.com/@zxing/library@0.20.0\">");
+        throw new Error('ZXing no se ha cargado. Revisa <script src="https://unpkg.com/@zxing/library@0.20.0">');
       }
-      // Mostrar en la UI el valor fijo (por si acaso)
       if (eventIdEl) eventIdEl.value = EVENT_ID;
 
       const hints = new Map();
@@ -94,31 +132,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
 
       codeReader = new ZXing.BrowserMultiFormatReader(hints);
-
       await listCameras();
 
       btnStart.disabled = true; btnStop.disabled = false;
-      setStatus('Escaneando… (acerca/aleja el QR hasta ~60% de la vista)', 'ok');
+      setStatus('Escaneando… (se reinicia tras cada lectura)', 'ok');
 
-      const constraints = {
-        video: {
-          deviceId: { exact: currentDeviceId },
-          facingMode: "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 }
-        }
-      };
-
-      await codeReader.decodeFromConstraints(constraints, video, (result, err, controls) => {
-        if (result) {
-          const text = result.getText();
-          handleScan(text);
-          // detener tras leer para evitar dobles lecturas
-          controls.stop(); btnStart.disabled=false; btnStop.disabled=true;
-        }
-        if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
-      });
+      scanning = true;
+      await startScanLoop();
     } catch (e) {
       btnStart.disabled=false; btnStop.disabled=true;
       setStatus(`Error: ${e.message||e}`, 'err');
@@ -126,6 +146,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function stop() {
+    scanning = false;
     try { codeReader?.reset(); const ms = video.srcObject; ms?.getTracks?.().forEach(t => t.stop()); } catch {}
     btnStart.disabled=false; btnStop.disabled=true; setStatus('Cámara detenida.');
   }
