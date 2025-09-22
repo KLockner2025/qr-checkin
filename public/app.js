@@ -1,9 +1,7 @@
-// ==== CONFIGURACIÓN (Koyeb mismo origen) ====
-// Deja API_BASE vacío para usar el mismo dominio del servidor Express (sin CORS)
-const API_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app/";                       // mismo origen
-const ATTENDANT_TOKEN = "scan-XYZ123"; // el mismo ATTENDANT_TOKEN que definiste en Koyeb
+const API_BASE = "";                       
+const ATTENDANT_TOKEN = "scan-XYZ123"; // ATTENDANT_TOKEN de Koyeb
+const EVENT_ID = "MF2025";                   // Evento fijo
 
-const SEND_ENABLED = true; // en Koyeb queremos enviar siempre
 const PENDING_KEY = "checkin.pending";
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -15,8 +13,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusEl  = document.getElementById('status');
   const outputEl  = document.getElementById('output');
   const openLink  = document.getElementById('openLink');
-  const eventIdEl = document.getElementById('eventId');
-  const attendantEl = document.getElementById('attendant');
+  const eventIdEl = document.getElementById('eventId'); // solo para mostrar MF2025
 
   let codeReader = null;
   let currentDeviceId = null;
@@ -43,15 +40,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function handleScan(text){
-    const eventId   = (eventIdEl?.value || "").trim();
-    const attendant = (attendantEl?.value || "").trim();
-
     flashCam();
     setResult(text);
 
-    if (!eventId || !attendant) { setStatus('Completa Evento y Azafata.', 'err'); return; }
+    const payload = {
+      eventId: EVENT_ID,
+      code: text,
+      attendant: null, // ya no usamos azafata
+      deviceId: await deviceId(),
+      scannedAt: new Date().toISOString()
+    };
 
-    const payload = { eventId, code: text, attendant, deviceId: await deviceId(), scannedAt: new Date().toISOString() };
     try {
       const data = await sendCheckin(payload);
       if (data.duplicate) setStatus(`Duplicado (primera vez: ${new Date(data.firstSeenAt).toLocaleTimeString()})`, 'err');
@@ -87,6 +86,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (!window.ZXing || !ZXing.BrowserMultiFormatReader) {
         throw new Error("ZXing no se ha cargado. Revisa <script src=\"https://unpkg.com/@zxing/library@0.20.0\">");
       }
+      // Mostrar en la UI el valor fijo (por si acaso)
+      if (eventIdEl) eventIdEl.value = EVENT_ID;
 
       const hints = new Map();
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);

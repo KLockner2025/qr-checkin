@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Check-in QR</title>
+  <title>Check-in QR — MF2025</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
   <!-- súbele el v si no recarga en el móvil -->
-  <script defer src="app.js?v=10"></script>
+  <script defer src="app.js?v=11"></script>
 </head>
 <body>
   <div class="wrap">
@@ -18,11 +18,10 @@
     </header>
 
     <div class="card">
+      <!-- Evento fijo mostrado (solo lectura) -->
       <div class="row">
         <label class="small">Evento:</label>
-        <input id="eventId" placeholder="ej: MF2025" />
-        <label class="small">Azafata:</label>
-        <input id="attendant" placeholder="Nombre o código" />
+        <input value="MF2025" id="eventId" readonly />
       </div>
 
       <!-- Recuadro de cámara reducido con marco "flash" -->
