@@ -1,16 +1,17 @@
 // ==== CONFIGURACIÓN (mismo origen en Koyeb) ====
-// Si tu frontend y backend están en el mismo dominio, deja API_BASE = "" (sin CORS)
+// Si frontend y backend están en el mismo dominio, deja API_BASE = "" (sin CORS)
 const API_BASE = "";
 const ATTENDANT_TOKEN = "scan-XYZ123"; // debe coincidir con tu var de entorno en Koyeb
 const EVENT_ID = "MF2025";             // opcional, informativo
 
 document.addEventListener("DOMContentLoaded", () => {
-  const video    = document.getElementById("video");
-  const startBtn = document.getElementById("btnStart");
-const stopBtn  = document.getElementById("btnStop");
-  const statusEl = document.getElementById("status");
-  const outputEl = document.getElementById("output");
-  const eventIdEl= document.getElementById("eventId");
+  const video     = document.getElementById("video");
+  const startBtn  = document.getElementById("startCam");
+  const statusEl  = document.getElementById("status");
+  const outputEl  = document.getElementById("output");
+  const btnCopy   = document.getElementById("btnCopy");
+  const openLink  = document.getElementById("openLink");
+  const eventIdEl = document.getElementById("eventId");
 
   let codeReader = null;
   let lastText = null;
@@ -22,20 +23,25 @@ const stopBtn  = document.getElementById("btnStop");
   };
   const setResult = (text) => {
     outputEl.textContent = text || "—";
+    try {
+      const url = new URL(text);
+      openLink.style.display = "inline-block";
+      openLink.href = url.href;
+    } catch {
+      openLink.style.display = "none";
+      openLink.removeAttribute("href");
+    }
+    btnCopy.disabled = !text || text === "—";
   };
 
   function ensureZXing() {
     if (!window.ZXing || !ZXing.BrowserMultiFormatReader) {
-      throw new Error(
-        'ZXing no se ha cargado. Usa: <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>'
-      );
+      throw new Error("ZXing no se ha cargado (usa /vendor/zxing.umd.min.js).");
     }
-    startBtn.disabled = true;
-  stopBtn.disabled  = false;
   }
 
   async function pickBackCamera() {
-    // iOS: pedir un stream breve para obtener labels
+    // iOS: pedir un stream breve para revelar labels
     try {
       const s = await navigator.mediaDevices.getUserMedia({ video: true });
       s.getTracks().forEach(t => t.stop());
@@ -48,61 +54,54 @@ const stopBtn  = document.getElementById("btnStop");
   }
 
   async function startCamera() {
-  try {
-    ensureZXing();
-    if (eventIdEl) eventIdEl.value = EVENT_ID;
-
-    // 1) Fuerza el PROMPT de permisos con un stream temporal mínimo
-    let tempStream = null;
     try {
-      tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-      // cerramos el stream temporal inmediatamente
-      tempStream.getTracks().forEach(t => t.stop());
-    } catch (e) {
-      console.error("Permiso cámara falló:", e);
-      setStatus(
-        "No se pudo solicitar permiso de cámara. Revisa permisos del sitio (icono del candado) y vuelve a intentarlo.",
-        "err"
-      );
-      return;
-    }
+      ensureZXing();
+      if (eventIdEl) eventIdEl.value = EVENT_ID;
 
-    // 2) Con permisos concedidos, elegimos la trasera y arrancamos ZXing
-    codeReader = new ZXing.BrowserMultiFormatReader();
-
-    const deviceId = await pickBackCamera();
-    const constraints = deviceId
-      ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } }
-      : { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } };
-
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject = stream;
-    await video.play();
-
-    await codeReader.decodeFromVideoDevice(deviceId || null, video, (result, err) => {
-      if (result) {
-        const text = result.getText();
-        const now = Date.now();
-        if (text === lastText && now - lastAt < 1200) return; // anti-doble
-        lastText = text; lastAt = now;
-        setResult(text);
-        sendCheckin(text).catch(e => {
-          console.error(e);
-          setStatus("Error enviando check-in", "err");
-        });
+      // 1) Forzar PROMPT de permisos con stream temporal mínimo
+      try {
+        const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
+        tmp.getTracks().forEach(t => t.stop());
+      } catch (e) {
+        console.error("Permiso cámara falló:", e);
+        setStatus("No se pudo solicitar permiso de cámara. Revisa el icono del candado y vuelve a intentarlo.", "err");
+        return;
       }
-      // Errores NotFound/Checksum son normales mientras no hay QR en cuadro
-    });
 
-    startBtn.disabled = true;
-    stopBtn && (stopBtn.disabled = false);
-    setStatus("Cámara encendida. Escaneando…", "ok");
-  } catch (e) {
-    console.error("Error al iniciar cámara:", e);
-    setStatus(`No se pudo abrir la cámara (${e.name || e.message}). Revisa permisos del sitio.`, "err");
+      // 2) Con permisos concedidos, elegir trasera y arrancar ZXing
+      codeReader = new ZXing.BrowserMultiFormatReader();
+
+      const deviceId = await pickBackCamera();
+      const constraints = deviceId
+        ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } }
+        : { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      await video.play();
+
+      await codeReader.decodeFromVideoDevice(deviceId || null, video, (result, err) => {
+        if (result) {
+          const text = result.getText();
+          const now = Date.now();
+          if (text === lastText && now - lastAt < 1200) return; // anti-doble
+          lastText = text; lastAt = now;
+          setResult(text);
+          sendCheckin(text).catch(e => {
+            console.error(e);
+            setStatus("Error enviando check-in", "err");
+          });
+        }
+        // NotFound/Checksum son normales mientras no hay QR en cuadro
+      });
+
+      startBtn.disabled = true;
+      setStatus("Cámara encendida. Escaneando…", "ok");
+    } catch (e) {
+      console.error("Error al iniciar cámara:", e);
+      setStatus(`No se pudo abrir la cámara (${e.name || e.message}). Revisa permisos del sitio.`, "err");
+    }
   }
-}
-
 
   async function sendCheckin(codeText) {
     if (!ATTENDANT_TOKEN) {
@@ -126,18 +125,19 @@ const stopBtn  = document.getElementById("btnStop");
     setStatus(`Check-in: ${msg}`, data.duplicate ? "err" : "ok");
   }
 
+  // Listeners
   startBtn.addEventListener("click", startCamera);
 
-stopBtn.addEventListener("click", () => {
-  try {
-    codeReader?.reset();
-    const ms = video.srcObject;
-    ms?.getTracks?.().forEach(t => t.stop());
-  } catch {}
-  startBtn.disabled = false;
-  stopBtn.disabled  = true;
-  statusEl.textContent = "Cámara detenida.";
-});
+  btnCopy.addEventListener("click", async () => {
+    const t = outputEl.textContent.trim();
+    if (!t || t === "—") return;
+    try {
+      await navigator.clipboard.writeText(t);
+      setStatus("Copiado.", "ok");
+    } catch {
+      setStatus("No se pudo copiar.", "err");
+    }
+  });
 
   video.addEventListener("loadedmetadata", () => {
     video.setAttribute("playsinline", "true");
