@@ -1,20 +1,22 @@
-// FRONT DEMO: si API_BASE queda vacío, solo muestra el QR y no envía nada.
-const API_BASE = "";
-const SEND_ENABLED = !!API_BASE;
+// ==== CONFIGURACIÓN (Koyeb mismo origen) ====
+// Deja API_BASE vacío para usar el mismo dominio del servidor Express (sin CORS)
+const API_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app/";                       // mismo origen
+const ATTENDANT_TOKEN = "scan-XYZ123"; // el mismo ATTENDANT_TOKEN que definiste en Koyeb
+
+const SEND_ENABLED = true; // en Koyeb queremos enviar siempre
 const PENDING_KEY = "checkin.pending";
 
 document.addEventListener('DOMContentLoaded', async () => {
   const video     = document.getElementById('video');
+  const camBox    = document.getElementById('camBox');
   const btnStart  = document.getElementById('btnStart');
   const btnStop   = document.getElementById('btnStop');
   const btnCopy   = document.getElementById('btnCopy');
-  const btnSync   = document.getElementById('btnSync');
   const statusEl  = document.getElementById('status');
   const outputEl  = document.getElementById('output');
   const openLink  = document.getElementById('openLink');
   const eventIdEl = document.getElementById('eventId');
   const attendantEl = document.getElementById('attendant');
-  const attTokenEl  = document.getElementById('attToken');
 
   let codeReader = null;
   let currentDeviceId = null;
@@ -25,15 +27,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     try { const url = new URL(text); openLink.style.display = 'inline-block'; openLink.href = url.href; }
     catch { openLink.style.display = 'none'; openLink.removeAttribute('href'); }
   }
-
+  function flashCam(ms=400){ camBox?.classList.add('flash'); setTimeout(()=>camBox?.classList.remove('flash'), ms); }
   function loadPending(){ try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "[]"); } catch { return []; } }
   function savePending(list){ localStorage.setItem(PENDING_KEY, JSON.stringify(list)); }
 
   async function sendCheckin(payload){
-    if (!SEND_ENABLED) throw new Error("DEMO_MODE_NO_BACKEND");
+    if (!ATTENDANT_TOKEN) throw new Error("ATTENDANT_TOKEN_MISSING");
     const res = await fetch(`${API_BASE}/api/checkin`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${attTokenEl.value.trim()}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ATTENDANT_TOKEN}` },
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -43,10 +45,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function handleScan(text){
     const eventId   = (eventIdEl?.value || "").trim();
     const attendant = (attendantEl?.value || "").trim();
+
+    flashCam();
     setResult(text);
 
-    if (!SEND_ENABLED) { setStatus('QR leído (modo demo: no se envía).', 'ok'); return; }
-    if (!eventId || !attendant || !attTokenEl.value.trim()) { setStatus('Completa Evento, Azafata y Token.', 'err'); return; }
+    if (!eventId || !attendant) { setStatus('Completa Evento y Azafata.', 'err'); return; }
 
     const payload = { eventId, code: text, attendant, deviceId: await deviceId(), scannedAt: new Date().toISOString() };
     try {
@@ -59,17 +62,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // ---------- Listar cámaras con Web API ----------
+  // ---------- Cámaras con Web API ----------
   async function listCameras() {
     try {
       const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       tmp.getTracks().forEach(t => t.stop());
-    } catch {
-      throw new Error("Permiso de cámara denegado o no disponible");
-    }
+    } catch { throw new Error("Permiso de cámara denegado o no disponible"); }
+
     const devices = await navigator.mediaDevices.enumerateDevices();
     const vids = devices.filter(d => d.kind === "videoinput");
     if (!vids.length) throw new Error("No se han encontrado cámaras");
+
     vids.sort((a, b) => {
       const sa = (a.label || "").toLowerCase(), sb = (b.label || "").toLowerCase();
       const score = s => /back|rear|environment|trasera|posterior/.test(s) ? 1 : 0;
@@ -77,7 +80,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     currentDeviceId = vids[0].deviceId;
   }
-  // ------------------------------------------------
+  // -----------------------------------------
 
   async function start() {
     try {
@@ -85,7 +88,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         throw new Error("ZXing no se ha cargado. Revisa <script src=\"https://unpkg.com/@zxing/library@0.20.0\">");
       }
 
-      // Hints para forzar QR y buscar más (TRY_HARDER)
       const hints = new Map();
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
@@ -95,9 +97,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       await listCameras();
 
       btnStart.disabled = true; btnStop.disabled = false;
-      setStatus('Escaneando… (acerca/aleja el QR hasta llenar ~60% de la vista)', 'ok');
+      setStatus('Escaneando… (acerca/aleja el QR hasta ~60% de la vista)', 'ok');
 
-      // Usa constraints para mejor enfoque y resolución
       const constraints = {
         video: {
           deviceId: { exact: currentDeviceId },
@@ -112,12 +113,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (result) {
           const text = result.getText();
           handleScan(text);
-          // Para evitar lecturas repetidas: paramos y dejamos que el usuario pulse Iniciar de nuevo
+          // detener tras leer para evitar dobles lecturas
           controls.stop(); btnStart.disabled=false; btnStop.disabled=true;
         }
-        if (err && !(err instanceof ZXing.NotFoundException)) {
-          console.debug(err);
-        }
+        if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
       });
     } catch (e) {
       btnStart.disabled=false; btnStop.disabled=true;
@@ -126,26 +125,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   async function stop() {
-    try {
-      codeReader?.reset();
-      const ms = video.srcObject;
-      if (ms?.getTracks) ms.getTracks().forEach(t => t.stop());
-    } catch {}
+    try { codeReader?.reset(); const ms = video.srcObject; ms?.getTracks?.().forEach(t => t.stop()); } catch {}
     btnStart.disabled=false; btnStop.disabled=true; setStatus('Cámara detenida.');
   }
 
   btnStart.addEventListener('click', start);
   btnStop.addEventListener('click', stop);
-
-  btnSync?.addEventListener('click', async () => {
-    const pend = loadPending(); if (!pend.length) { setStatus('No hay pendientes.', 'ok'); return; }
-    let ok=0, fail=0;
-    for (const p of [...pend]) {
-      try { await sendCheckin(p); ok++; pend.shift(); savePending(pend); }
-      catch { fail++; }
-    }
-    setStatus(`Sincronización: ${ok} enviados, ${fail} fallidos.`, fail? 'err':'ok');
-  });
 
   btnCopy.addEventListener('click', async () => {
     const t = outputEl.textContent.trim(); if (!t || t==='—') return;
