@@ -48,45 +48,61 @@ const stopBtn  = document.getElementById("btnStop");
   }
 
   async function startCamera() {
+  try {
+    ensureZXing();
+    if (eventIdEl) eventIdEl.value = EVENT_ID;
+
+    // 1) Fuerza el PROMPT de permisos con un stream temporal mínimo
+    let tempStream = null;
     try {
-      ensureZXing();
-      if (eventIdEl) eventIdEl.value = EVENT_ID;
-
-      codeReader = new ZXing.BrowserMultiFormatReader();
-
-      const deviceId = await pickBackCamera();
-      const constraints = deviceId
-        ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } }
-        : { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } };
-
-      // Abrir cámara
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      video.srcObject = stream;
-      await video.play();
-
-      // Decodificar continuamente
-      await codeReader.decodeFromVideoDevice(deviceId || null, video, (result, err) => {
-        if (result) {
-          const text = result.getText();
-          const now = Date.now();
-          if (text === lastText && now - lastAt < 1200) return; // anti-doble
-          lastText = text; lastAt = now;
-          setResult(text);
-          sendCheckin(text).catch(e => {
-            console.error(e);
-            setStatus("Error enviando check-in", "err");
-          });
-        }
-        // Los NotFound son normales mientras no hay QR en cuadro
-      });
-
-      startBtn.disabled = true;
-      setStatus("Cámara encendida. Escaneando…", "ok");
+      tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      // cerramos el stream temporal inmediatamente
+      tempStream.getTracks().forEach(t => t.stop());
     } catch (e) {
-      console.error("Error al iniciar cámara:", e);
-      setStatus("No se pudo abrir la cámara. Revisa permisos y vuelve a intentarlo.", "err");
+      console.error("Permiso cámara falló:", e);
+      setStatus(
+        "No se pudo solicitar permiso de cámara. Revisa permisos del sitio (icono del candado) y vuelve a intentarlo.",
+        "err"
+      );
+      return;
     }
+
+    // 2) Con permisos concedidos, elegimos la trasera y arrancamos ZXing
+    codeReader = new ZXing.BrowserMultiFormatReader();
+
+    const deviceId = await pickBackCamera();
+    const constraints = deviceId
+      ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } } }
+      : { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } } };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+
+    await codeReader.decodeFromVideoDevice(deviceId || null, video, (result, err) => {
+      if (result) {
+        const text = result.getText();
+        const now = Date.now();
+        if (text === lastText && now - lastAt < 1200) return; // anti-doble
+        lastText = text; lastAt = now;
+        setResult(text);
+        sendCheckin(text).catch(e => {
+          console.error(e);
+          setStatus("Error enviando check-in", "err");
+        });
+      }
+      // Errores NotFound/Checksum son normales mientras no hay QR en cuadro
+    });
+
+    startBtn.disabled = true;
+    stopBtn && (stopBtn.disabled = false);
+    setStatus("Cámara encendida. Escaneando…", "ok");
+  } catch (e) {
+    console.error("Error al iniciar cámara:", e);
+    setStatus(`No se pudo abrir la cámara (${e.name || e.message}). Revisa permisos del sitio.`, "err");
   }
+}
+
 
   async function sendCheckin(codeText) {
     if (!ATTENDANT_TOKEN) {
