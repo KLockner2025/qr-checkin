@@ -3,54 +3,105 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Panel de Asistentes</title>
+  <title>Panel de Asistentes — MF2025</title>
   <style>
     body { font-family: ui-sans-serif, system-ui, -apple-system; background:#0b0b10; color:#e8e8ee; margin:0; }
-    .wrap { max-width: 900px; margin: 0 auto; padding: 20px; }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 20px; }
     input, button { background:#161a22; color:#e8e8ee; border:1px solid #2a3244; border-radius:10px; padding:8px 12px; }
     table { width:100%; border-collapse:collapse; margin-top:12px; }
     th, td { border-bottom:1px solid #1f2330; padding:8px; text-align:left; }
     .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .badge { background:#10211c; border:1px solid #19483e; padding:6px 10px; border-radius:999px; }
+    .grid { display:grid; grid-template-columns: 1fr; gap:18px; }
+    @media (min-width: 820px) { .grid { grid-template-columns: 1fr 1fr; } }
+    .card { background:#111319; border:1px solid #1f2330; border-radius:12px; padding:12px; }
+    code { background:#0f1320; padding:2px 6px; border-radius:6px; }
+    .small { color:#9aa0a6; font-size:.9rem; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>👥 Asistentes</h1>
+    <h1>👥 Asistentes — <span id="evtTitle">MF2025</span></h1>
+
     <div class="row">
-      <input id="baseUrl" placeholder="Base URL (vacío=same origin)" style="min-width:260px" />
+      <input id="baseUrl" placeholder="Base URL" style="min-width:320px" />
       <input id="adminToken" placeholder="Admin token" />
       <input id="eventId" placeholder="Evento (opcional)" />
       <button id="btnLoad">Cargar</button>
     </div>
+
     <div class="row" style="margin-top:8px">
-      <span class="badge">Total: <b id="total">0</b></span>
-      <span class="badge">Evento: <b id="evt">—</b></span>
+      <span class="badge">Total registros: <b id="total">0</b></span>
+      <span class="badge">Únicos (códigos): <b id="unique">0</b></span>
       <span class="badge">Conexión: <b id="conn">offline</b></span>
     </div>
 
-    <table id="tbl">
-      <thead><tr><th>#</th><th>Hora</th><th>Código</th><th>Azafata</th><th>Dispositivo</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <div class="grid" style="margin-top:14px">
+      <div class="card">
+        <h3 style="margin:6px 0 8px">Registros (cronológico)</h3>
+        <table id="tbl">
+          <thead><tr><th>#</th><th>Hora</th><th>Código</th><th>Dispositivo</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:6px 0 8px">Asistentes únicos (<span id="evtUnique">MF2025</span>)</h3>
+        <div class="small">Se basa en códigos únicos por evento.</div>
+        <table id="tblUnique">
+          <thead><tr><th>#</th><th>Código</th><th>Primera hora</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <script>
     const $ = sel => document.querySelector(sel);
     const tbody = $('#tbl tbody');
-    let cfg = { base:"", token:"", eventId:"" };
+    const tbodyU = $('#tblUnique tbody');
+
+    let cfg = { base:"", token:"", eventId:"MF2025" };
     let rows = [];
 
+    // Rellena por defecto
+    window.addEventListener('DOMContentLoaded', () => {
+      const DEF_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app";
+      $('#baseUrl').value = DEF_BASE;
+      $('#eventId').value = "MF2025";
+      $('#evtTitle').textContent = "MF2025";
+      $('#evtUnique').textContent = "MF2025";
+    });
+
     function render(){
+      // ordenar por fecha
+      rows = rows.sort((a,b) => (a.createdAt || a.scannedAt).localeCompare(b.createdAt || b.scannedAt));
+      // tabla normal
       $('#total').textContent = rows.length;
-      $('#evt').textContent = cfg.eventId || 'Todos';
+      $('#evtTitle').textContent = cfg.eventId || 'Todos';
+      $('#evtUnique').textContent = cfg.eventId || 'Todos';
       tbody.innerHTML = rows.map((r,i)=>`
         <tr>
           <td>${i+1}</td>
           <td>${new Date(r.createdAt || r.scannedAt).toLocaleTimeString()}</td>
           <td><code>${r.code}</code></td>
-          <td>${r.attendant||''}</td>
           <td class="small">${r.deviceId||''}</td>
+        </tr>`).join('');
+
+      // únicos por código
+      const firstByCode = new Map();
+      for (const r of rows) {
+        if (!firstByCode.has(r.code)) firstByCode.set(r.code, r);
+      }
+      const uniques = Array.from(firstByCode.values())
+        .sort((a,b)=> (a.createdAt || a.scannedAt).localeCompare(b.createdAt || b.scannedAt));
+
+      $('#unique').textContent = uniques.length;
+      tbodyU.innerHTML = uniques.map((r,i)=>`
+        <tr>
+          <td>${i+1}</td>
+          <td><code>${r.code}</code></td>
+          <td>${new Date(r.createdAt || r.scannedAt).toLocaleTimeString()}</td>
         </tr>`).join('');
     }
 
@@ -64,12 +115,11 @@
     }
 
     function connectSSE(){
-      if (!cfg.token) return;
-      // Para SSE protegido por Bearer, lo servimos sin credenciales y confiamos en el backend (token ya validó /admin/checkins)
+      if (!cfg.base) return;
       const es = new EventSource(`${cfg.base}/admin/stream`);
       $('#conn').textContent = 'conectado';
       es.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
+        const msg = JSON.parse(e.data || "{}");
         if (msg?.type === 'checkin') {
           const r = msg.payload;
           if (!cfg.eventId || r.eventId === cfg.eventId) { rows.push(r); render(); }
