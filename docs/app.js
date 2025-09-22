@@ -1,5 +1,5 @@
 // FRONT DEMO: si API_BASE queda vacío, solo muestra el QR y no envía nada.
-const API_BASE = "";
+const API_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app/";
 const SEND_ENABLED = !!API_BASE;
 const PENDING_KEY = "checkin.pending";
 
