@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Panel de Asistentes — MF2025</title>
+  <link rel="icon" href="data:,">
   <style>
     body { font-family: ui-sans-serif, system-ui, -apple-system; background:#0b0b10; color:#e8e8ee; margin:0; }
     .wrap { max-width: 1100px; margin: 0 auto; padding: 20px; }
@@ -35,22 +36,22 @@
       <span class="badge">Total escaneos: <b id="totalScans">0</b></span>
       <span class="badge">Únicos (códigos): <b id="uniqueCodes">0</b></span>
       <span class="badge">Duplicados: <b id="dupsCount">0</b></span>
-      <span class="badge">Conexión: <b id="conn">offline</b></span>
+      <span class="badge">Actualización: <b id="conn">—</b></span>
     </div>
 
     <div class="grid" style="margin-top:14px">
       <div class="card">
         <h3 style="margin:6px 0 8px">Histórico de escaneos</h3>
-        <div class="small">Incluye duplicados. Ordenado por hora.</div>
+        <div class="small">Incluye duplicados (si el mismo código aparece más de una vez).</div>
         <table id="tblScans">
-          <thead><tr><th>#</th><th>Hora</th><th>Código</th><th>¿Duplicado?</th><th>Dispositivo</th></tr></thead>
+          <thead><tr><th>#</th><th>Hora</th><th>Código</th><th>¿Duplicado?</th><th>IP</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
 
       <div class="card">
         <h3 style="margin:6px 0 8px">Asistentes únicos (<span id="evtUnique">MF2025</span>)</h3>
-        <div class="small">Primer check-in por código dentro del evento.</div>
+        <div class="small">Primer check-in por código.</div>
         <table id="tblUnique">
           <thead><tr><th>#</th><th>Código</th><th>Primera hora</th></tr></thead>
           <tbody></tbody>
@@ -59,130 +60,16 @@
     </div>
 
     <div class="card" style="margin-top:12px">
-      <h3 style="margin:6px 0 8px">Duplicados recientes (en vivo)</h3>
-      <div class="small">No persiste; útil si mantienes esta página abierta durante el evento.</div>
+      <h3 style="margin:6px 0 8px">Duplicados recientes</h3>
+      <div class="small">Vuelve a cargar (o espera el auto-refresco) para verlos.</div>
       <table id="tblDupLive">
-        <thead><tr><th>#</th><th>Hora dup</th><th>Código</th><th>Dispositivo</th><th>Primera vez</th></tr></thead>
+        <thead><tr><th>#</th><th>Hora dup</th><th>Código</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
   </div>
 
-  <script>
-    const $ = sel => document.querySelector(sel);
-    const tbodyScans = $('#tblScans tbody');
-    const tbodyU     = $('#tblUnique tbody');
-    const tbodyDL    = $('#tblDupLive tbody');
-
-    let cfg = { base:"", token:"", eventId:"MF2025" };
-    let scans = []; // histórico
-    let uniqs = []; // derivados de scans
-    let dupLive = [];
-
-    // Por defecto
-    window.addEventListener('DOMContentLoaded', () => {
-      const DEF_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app";
-      $('#baseUrl').value = DEF_BASE;
-      $('#eventId').value = "MF2025";
-      $('#evtTitle').textContent = "MF2025";
-      $('#evtUnique').textContent = "MF2025";
-    });
-
-    function recomputeFromScans() {
-      // Únicos por código: primera aparición
-      const firstByCode = new Map();
-      for (const r of scans) {
-        if (!firstByCode.has(r.code)) firstByCode.set(r.code, r);
-      }
-      uniqs = Array.from(firstByCode.values())
-        .sort((a,b)=> (a.createdAt||a.scannedAt).localeCompare(b.createdAt||b.scannedAt));
-    }
-
-    function render() {
-      // contadores
-      $('#totalScans').textContent  = scans.length;
-      $('#uniqueCodes').textContent = uniqs.length;
-      $('#dupsCount').textContent   = Math.max(scans.length - uniqs.length, 0);
-
-      // histórico (incluye duplicados)
-      tbodyScans.innerHTML = scans.map((r,i)=>`
-        <tr>
-          <td>${i+1}</td>
-          <td>${new Date(r.createdAt || r.scannedAt).toLocaleTimeString()}</td>
-          <td><code>${r.code}</code></td>
-          <td class="${r.isDuplicate ? 'dup' : ''}">${r.isDuplicate ? 'Sí' : 'No'}</td>
-          <td class="small">${r.deviceId||''}</td>
-        </tr>
-      `).join('');
-
-      // únicos
-      tbodyU.innerHTML = uniqs.map((r,i)=>`
-        <tr>
-          <td>${i+1}</td>
-          <td><code>${r.code}</code></td>
-          <td>${new Date(r.firstSeenAt || r.createdAt || r.scannedAt).toLocaleTimeString()}</td>
-        </tr>
-      `).join('');
-
-      // duplicados en vivo
-      tbodyDL.innerHTML = dupLive.slice(-20).reverse().map((d,i)=>`
-        <tr>
-          <td>${i+1}</td>
-          <td>${new Date(d.duplicateAt).toLocaleTimeString()}</td>
-          <td><code>${d.code}</code></td>
-          <td class="small">${d.deviceId||''}</td>
-          <td class="small">${new Date(d.firstSeenAt).toLocaleTimeString()}</td>
-        </tr>
-      `).join('');
-    }
-
-    async function loadScans() {
-      const url = `${cfg.base}/admin/scans${cfg.eventId ? ('?eventId='+encodeURIComponent(cfg.eventId)) : ''}`;
-      const res = await fetch(url, { headers: { Authorization:`Bearer ${cfg.token}` }});
-      if (!res.ok) throw new Error('HTTP '+res.status);
-      const data = await res.json();
-      scans = (data.rows || []).slice().sort((a,b)=> (a.createdAt||a.scannedAt).localeCompare(b.createdAt||b.scannedAt));
-      // Normalizamos firstSeenAt si no viniera (compat.)
-      for (const r of scans) if (r.firstSeenAt == null) r.firstSeenAt = r.isDuplicate ? null : (r.createdAt || r.scannedAt);
-      recomputeFromScans();
-      render();
-    }
-
-    function connectSSE(){
-      if (!cfg.base) return;
-      const es = new EventSource(`${cfg.base}/admin/stream`);
-      $('#conn').textContent = 'conectado';
-      es.onmessage = (e) => {
-        const msg = JSON.parse(e.data || "{}");
-        if (msg?.type === 'checkin') {
-          const r = msg.payload;
-          if (!cfg.eventId || r.eventId === cfg.eventId) {
-            // añadir a histórico (no es duplicado)
-            scans.push({ ...r, isDuplicate:false, firstSeenAt: r.createdAt });
-            recomputeFromScans(); render();
-          }
-        }
-        if (msg?.type === 'duplicate') {
-          const d = msg.payload;
-          if (!cfg.eventId || d.eventId === cfg.eventId) {
-            dupLive.push(d);
-            // añadir al histórico como duplicado (por si mantenemos la página abierta)
-            scans.push({ eventId:d.eventId, code:d.code, deviceId:d.deviceId||null, scannedAt:d.duplicateAt, createdAt:d.duplicateAt, isDuplicate:true, firstSeenAt:d.firstSeenAt });
-            recomputeFromScans(); render();
-          }
-        }
-      };
-      es.onerror = () => { $('#conn').textContent = 'reconectando…'; };
-    }
-
-    $('#btnLoad').addEventListener('click', async () => {
-      cfg.base = ($('#baseUrl').value || '').replace(/\/+$/,'');
-      cfg.token = $('#adminToken').value.trim();
-      cfg.eventId = $('#eventId').value.trim();
-      dupLive = [];
-      await loadScans();
-      connectSSE(); // opcional, por si lo dejas abierto durante el evento
-    });
-  </script>
+  <!-- Script externo para cumplir CSP -->
+  <script src="/admin.js?v=1" defer></script>
 </body>
 </html>
