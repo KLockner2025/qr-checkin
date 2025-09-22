@@ -6,7 +6,8 @@ const EVENT_ID = "MF2025";             // opcional, informativo
 
 document.addEventListener("DOMContentLoaded", () => {
   const video    = document.getElementById("video");
-  const startBtn = document.getElementById("startCam");
+  const startBtn = document.getElementById("btnStart");
+const stopBtn  = document.getElementById("btnStop");
   const statusEl = document.getElementById("status");
   const outputEl = document.getElementById("output");
   const eventIdEl= document.getElementById("eventId");
@@ -29,6 +30,8 @@ document.addEventListener("DOMContentLoaded", () => {
         'ZXing no se ha cargado. Usa: <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>'
       );
     }
+    startBtn.disabled = true;
+  stopBtn.disabled  = false;
   }
 
   async function pickBackCamera() {
@@ -108,6 +111,18 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   startBtn.addEventListener("click", startCamera);
+
+stopBtn.addEventListener("click", () => {
+  try {
+    codeReader?.reset();
+    const ms = video.srcObject;
+    ms?.getTracks?.().forEach(t => t.stop());
+  } catch {}
+  startBtn.disabled = false;
+  stopBtn.disabled  = true;
+  statusEl.textContent = "Cámara detenida.";
+});
+
   video.addEventListener("loadedmetadata", () => {
     video.setAttribute("playsinline", "true");
     video.play().catch(() => {});
