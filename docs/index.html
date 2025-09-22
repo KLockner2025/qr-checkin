@@ -6,7 +6,8 @@
   <title>Check-in QR</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
-  <script defer src="app.js?v=4"></script>
+  <!-- súbele el v cuando actualices app.js para forzar recarga -->
+  <script defer src="app.js?v=6"></script>
 </head>
 <body>
   <div class="wrap">
@@ -23,13 +24,11 @@
         <label class="small">Azafata:</label>
         <input id="attendant" placeholder="Nombre o código" />
       </div>
-      <div class="row">
-        <label class="small">Token:</label>
-        <input id="attToken" placeholder="***" type="password" />
-        <button id="btnSync" title="Enviar pendientes">Sincronizar</button>
-      </div>
 
-      <video id="video" playsinline muted></video>
+      <!-- Recuadro de cámara más pequeño con marco -->
+      <div class="cam" id="camBox">
+        <video id="video" playsinline muted></video>
+      </div>
 
       <div class="status" id="status">Listo. Pulsa <b>Iniciar cámara</b>.</div>
       <div class="out" id="output">—</div>
@@ -42,7 +41,7 @@
       </div>
 
       <div class="footer small">
-        Si no hay conexión, se guardan lecturas y podrás <b>Sincronizar</b> después.
+        En cuanto se lea el QR: marco rojo, se envía y se detiene el escaneo.
       </div>
     </div>
   </div>

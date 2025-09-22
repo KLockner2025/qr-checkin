@@ -1,20 +1,25 @@
-// FRONT DEMO: si API_BASE queda vacío, solo muestra el QR y no envía nada.
-const API_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app/";
+// ==== CONFIGURACIÓN ====
+// URL de tu backend (Koyeb/Render). Si se deja vacío, MODO DEMO (solo muestra el QR)
+const API_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app/"; // ej: "https://tuapp.koyeb.app"
+
+// Token de azafatas (NADIE lo teclea; va embebido aquí)
+const ATTENDANT_TOKEN = "scan-XYZ123"; // ej: "scan-XYZ123"
+
+// Envío activo si hay backend
 const SEND_ENABLED = !!API_BASE;
 const PENDING_KEY = "checkin.pending";
 
 document.addEventListener('DOMContentLoaded', async () => {
   const video     = document.getElementById('video');
+  const camBox    = document.getElementById('camBox');
   const btnStart  = document.getElementById('btnStart');
   const btnStop   = document.getElementById('btnStop');
   const btnCopy   = document.getElementById('btnCopy');
-  const btnSync   = document.getElementById('btnSync');
   const statusEl  = document.getElementById('status');
   const outputEl  = document.getElementById('output');
   const openLink  = document.getElementById('openLink');
   const eventIdEl = document.getElementById('eventId');
   const attendantEl = document.getElementById('attendant');
-  const attTokenEl  = document.getElementById('attToken');
 
   let codeReader = null;
   let currentDeviceId = null;
@@ -26,14 +31,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     catch { openLink.style.display = 'none'; openLink.removeAttribute('href'); }
   }
 
+  function flashCam(ms=400){
+    camBox?.classList.add('flash');
+    setTimeout(() => camBox?.classList.remove('flash'), ms);
+  }
+
   function loadPending(){ try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "[]"); } catch { return []; } }
   function savePending(list){ localStorage.setItem(PENDING_KEY, JSON.stringify(list)); }
 
   async function sendCheckin(payload){
     if (!SEND_ENABLED) throw new Error("DEMO_MODE_NO_BACKEND");
+    if (!ATTENDANT_TOKEN) throw new Error("ATTENDANT_TOKEN_MISSING");
     const res = await fetch(`${API_BASE}/api/checkin`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${attTokenEl.value.trim()}` },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ATTENDANT_TOKEN}` },
       body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -43,17 +54,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function handleScan(text){
     const eventId   = (eventIdEl?.value || "").trim();
     const attendant = (attendantEl?.value || "").trim();
+
+    // Confirmación visual inmediata
+    flashCam();
     setResult(text);
 
-    if (!SEND_ENABLED) { setStatus('QR leído (modo demo: no se envía).', 'ok'); return; }
-    if (!eventId || !attendant || !attTokenEl.value.trim()) { setStatus('Completa Evento, Azafata y Token.', 'err'); return; }
+    if (!SEND_ENABLED) { setStatus('QR leído (demo: no se envía).', 'ok'); return; }
+    if (!eventId || !attendant) { setStatus('Completa Evento y Azafata.', 'err'); return; }
 
     const payload = { eventId, code: text, attendant, deviceId: await deviceId(), scannedAt: new Date().toISOString() };
+
     try {
       const data = await sendCheckin(payload);
       if (data.duplicate) setStatus(`Duplicado (primera vez: ${new Date(data.firstSeenAt).toLocaleTimeString()})`, 'err');
       else setStatus('¡Check-in registrado!', 'ok');
     } catch (e) {
+      // Offline: guardamos localmente para sincronizar después
       const pend = loadPending(); pend.push(payload); savePending(pend);
       setStatus(`Sin conexión. Guardado (${pend.length} pendiente/s).`, 'err');
     }
@@ -85,7 +101,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         throw new Error("ZXing no se ha cargado. Revisa <script src=\"https://unpkg.com/@zxing/library@0.20.0\">");
       }
 
-      // Hints para forzar QR y buscar más (TRY_HARDER)
       const hints = new Map();
       hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
       hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
@@ -95,9 +110,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       await listCameras();
 
       btnStart.disabled = true; btnStop.disabled = false;
-      setStatus('Escaneando… (acerca/aleja el QR hasta llenar ~60% de la vista)', 'ok');
+      setStatus('Escaneando… (acerca/aleja el QR hasta ~60% de la vista)', 'ok');
 
-      // Usa constraints para mejor enfoque y resolución
       const constraints = {
         video: {
           deviceId: { exact: currentDeviceId },
@@ -112,12 +126,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (result) {
           const text = result.getText();
           handleScan(text);
-          // Para evitar lecturas repetidas: paramos y dejamos que el usuario pulse Iniciar de nuevo
+          // En cuanto lee: enviar y detener para evitar dobles lecturas.
           controls.stop(); btnStart.disabled=false; btnStop.disabled=true;
         }
-        if (err && !(err instanceof ZXing.NotFoundException)) {
-          console.debug(err);
-        }
+        if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
       });
     } catch (e) {
       btnStart.disabled=false; btnStop.disabled=true;
@@ -136,16 +148,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnStart.addEventListener('click', start);
   btnStop.addEventListener('click', stop);
-
-  btnSync?.addEventListener('click', async () => {
-    const pend = loadPending(); if (!pend.length) { setStatus('No hay pendientes.', 'ok'); return; }
-    let ok=0, fail=0;
-    for (const p of [...pend]) {
-      try { await sendCheckin(p); ok++; pend.shift(); savePending(pend); }
-      catch { fail++; }
-    }
-    setStatus(`Sincronización: ${ok} enviados, ${fail} fallidos.`, fail? 'err':'ok');
-  });
 
   btnCopy.addEventListener('click', async () => {
     const t = outputEl.textContent.trim(); if (!t || t==='—') return;
