@@ -5,16 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Check-in QR — MF2025</title>
   <link rel="stylesheet" href="styles.css" />
-  <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
-  <!-- súbele el v si no recarga en el móvil -->
-  <script defer src="app.js?v=12"></script>
 </head>
 <body>
   <div class="wrap">
     <header>
       <h1>📷 Check-in QR</h1>
-      <button id="btnStart" class="accent">Iniciar cámara</button>
-      <button id="btnStop" class="danger" disabled>Detener</button>
     </header>
 
     <div class="card">
@@ -24,9 +19,13 @@
         <input value="MF2025" id="eventId" readonly />
       </div>
 
-      <!-- Recuadro de cámara reducido con marco "flash" -->
+      <!-- Vista de cámara -->
       <div class="cam" id="camBox">
-        <video id="video" playsinline muted></video>
+        <video id="video" autoplay muted playsinline style="width:100%;max-width:600px;border-radius:12px;background:#000"></video>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="startCam" class="accent">Iniciar cámara</button>
       </div>
 
       <div class="status" id="status">Listo. Pulsa <b>Iniciar cámara</b>.</div>
@@ -44,5 +43,10 @@
       </div>
     </div>
   </div>
+
+  <!-- ZXing UMD -->
+  <script src="https://unpkg.com/@zxing/library@0.20.0/umd/index.min.js"></script>
+  <!-- Tu lógica: usa #video y #startCam -->
+  <script src="./app.js?v=5"></script>
 </body>
 </html>
