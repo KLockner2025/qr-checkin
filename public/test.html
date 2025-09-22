@@ -8,6 +8,7 @@
     body { font-family: system-ui, Arial; padding: 20px; }
     video { width: 100%; max-width: 600px; background: #000; border-radius: 12px; }
     pre { background: #f5f5f7; padding: 12px; border-radius: 8px; overflow:auto; }
+    button { padding: 10px 14px; border-radius: 8px; }
   </style>
 </head>
 <body>
@@ -18,41 +19,7 @@
   <h3>Log</h3>
   <pre id="log"></pre>
 
-  <script>
-    const v = document.getElementById('v');
-    const btn = document.getElementById('btn');
-    const log = document.getElementById('log');
-    const writeln = (m)=>log.textContent += m + "\\n";
-
-    async function pickBackId() {
-      try { const s = await navigator.mediaDevices.getUserMedia({ video: true }); s.getTracks().forEach(t=>t.stop()); } catch(e){}
-      const devs = await navigator.mediaDevices.enumerateDevices();
-      const vids = devs.filter(d=>d.kind==='videoinput');
-      const back = vids.find(d => /back|rear|environment|trasera|atr[aá]s/i.test(d.label));
-      return back?.deviceId || vids[1]?.deviceId || vids[0]?.deviceId || null;
-    }
-
-    async function start() {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        writeln('getUserMedia no soportado'); return;
-      }
-      try {
-        const id = await pickBackId();
-        const constraints = id ? { video: { deviceId: { exact: id } } }
-                               : { video: { facingMode: { ideal: 'environment' } } };
-        writeln('Constraints: ' + JSON.stringify(constraints));
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        v.srcObject = stream;
-        await v.play();
-        writeln('✅ Cámara funcionando');
-      } catch (e) {
-        writeln('❌ Error al abrir cámara: ' + (e.name || e.message));
-        console.error(e);
-        alert('No se pudo abrir la cámara: ' + (e.message || e.name));
-      }
-    }
-
-    btn.addEventListener('click', start);
-  </script>
+  <!-- Script externo (evita CSP contra inline scripts) -->
+  <script src="./test.js?v=1" defer></script>
 </body>
 </html>
