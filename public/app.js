@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let codeReader = null;
   let currentDeviceId = null;
 
-  // --- NUEVO: control de bucle continuo + anti-dobles ---
+  // Escaneo continuo + anti-dobles
   let scanning = false;
   let lastText = null;
   let lastAt   = 0;
@@ -88,7 +88,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   // -----------------------------------------
 
-  // --- NUEVO: bucle de escaneo continuo con debounce ---
+  // Bucle de escaneo continuo con debounce
   async function startScanLoop() {
     if (!scanning) return;
 
@@ -112,8 +112,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         lastText = text; lastAt = now;
         await handleScan(text);
 
-        // Paramos esta sesión y reanudamos en breve
+        // Reinicia correctamente la sesión de ZXing antes de continuar
         controls.stop();
+        codeReader.reset(); // ← ← ← ADICIÓN CLAVE
+
         if (scanning) setTimeout(() => startScanLoop(), 300);
       }
       if (err && !(err instanceof ZXing.NotFoundException)) console.debug(err);
