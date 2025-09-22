@@ -34,6 +34,7 @@
       <span class="badge">Total registros: <b id="total">0</b></span>
       <span class="badge">Únicos (códigos): <b id="unique">0</b></span>
       <span class="badge">Conexión: <b id="conn">offline</b></span>
+      <span class="badge">Duplicados (últimos 20): <b id="dupCount">0</b></span>
     </div>
 
     <div class="grid" style="margin-top:14px">
@@ -47,24 +48,35 @@
 
       <div class="card">
         <h3 style="margin:6px 0 8px">Asistentes únicos (<span id="evtUnique">MF2025</span>)</h3>
-        <div class="small">Se basa en códigos únicos por evento.</div>
+        <div class="small">Cálculo por código único dentro del evento.</div>
         <table id="tblUnique">
           <thead><tr><th>#</th><th>Código</th><th>Primera hora</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
     </div>
+
+    <div class="card" style="margin-top:12px">
+      <h3 style="margin:6px 0 8px">Duplicados recientes</h3>
+      <div class="small">No se guardan en disco; solo se muestran los últimos 20 recibidos en vivo.</div>
+      <table id="tblDup">
+        <thead><tr><th>#</th><th>Hora dup</th><th>Código</th><th>Dispositivo</th><th>Primera vez</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
     const $ = sel => document.querySelector(sel);
-    const tbody = $('#tbl tbody');
+    const tbody  = $('#tbl tbody');
     const tbodyU = $('#tblUnique tbody');
+    const tbodyD = $('#tblDup tbody');
 
-    let cfg = { base:"", token:"", eventId:"MF2025" };
-    let rows = [];
+    let cfg  = { base:"", token:"", eventId:"MF2025" };
+    let rows = [];   // registros únicos guardados
+    let dups = [];   // duplicados recientes (en vivo)
 
-    // Rellena por defecto
+    // Rellenar por defecto URL base y evento
     window.addEventListener('DOMContentLoaded', () => {
       const DEF_BASE = "https://usual-emilia-klockner-5ff8f497.koyeb.app";
       $('#baseUrl').value = DEF_BASE;
@@ -76,23 +88,24 @@
     function render(){
       // ordenar por fecha
       rows = rows.sort((a,b) => (a.createdAt || a.scannedAt).localeCompare(b.createdAt || b.scannedAt));
-      // tabla normal
+
+      // tabla principal
       $('#total').textContent = rows.length;
       $('#evtTitle').textContent = cfg.eventId || 'Todos';
       $('#evtUnique').textContent = cfg.eventId || 'Todos';
+
       tbody.innerHTML = rows.map((r,i)=>`
         <tr>
           <td>${i+1}</td>
           <td>${new Date(r.createdAt || r.scannedAt).toLocaleTimeString()}</td>
           <td><code>${r.code}</code></td>
           <td class="small">${r.deviceId||''}</td>
-        </tr>`).join('');
+        </tr>
+      `).join('');
 
-      // únicos por código
+      // únicos por código (primer check-in de cada código)
       const firstByCode = new Map();
-      for (const r of rows) {
-        if (!firstByCode.has(r.code)) firstByCode.set(r.code, r);
-      }
+      for (const r of rows) if (!firstByCode.has(r.code)) firstByCode.set(r.code, r);
       const uniques = Array.from(firstByCode.values())
         .sort((a,b)=> (a.createdAt || a.scannedAt).localeCompare(b.createdAt || b.scannedAt));
 
@@ -102,11 +115,24 @@
           <td>${i+1}</td>
           <td><code>${r.code}</code></td>
           <td>${new Date(r.createdAt || r.scannedAt).toLocaleTimeString()}</td>
-        </tr>`).join('');
+        </tr>
+      `).join('');
+
+      // duplicados recientes (en vivo, no persistidos)
+      $('#dupCount').textContent = dups.length;
+      tbodyD.innerHTML = dups.slice(-20).reverse().map((d,i)=>`
+        <tr>
+          <td>${i+1}</td>
+          <td>${new Date(d.duplicateAt).toLocaleTimeString()}</td>
+          <td><code>${d.code}</code></td>
+          <td class="small">${d.deviceId||''}</td>
+          <td class="small">${new Date(d.firstSeenAt).toLocaleTimeString()}</td>
+        </tr>
+      `).join('');
     }
 
     async function loadAll(){
-      const url = `${cfg.base}/admin/checkins?${cfg.eventId ? 'eventId='+encodeURIComponent(cfg.eventId):''}`;
+      const url = `${cfg.base}/admin/checkins${cfg.eventId ? ('?eventId='+encodeURIComponent(cfg.eventId)) : ''}`;
       const res = await fetch(url, { headers: { Authorization:`Bearer ${cfg.token}` }});
       if (!res.ok) throw new Error('HTTP '+res.status);
       const data = await res.json();
@@ -124,6 +150,10 @@
           const r = msg.payload;
           if (!cfg.eventId || r.eventId === cfg.eventId) { rows.push(r); render(); }
         }
+        if (msg?.type === 'duplicate') {
+          const d = msg.payload;
+          if (!cfg.eventId || d.eventId === cfg.eventId) { dups.push(d); render(); }
+        }
       };
       es.onerror = () => { $('#conn').textContent = 'reconectando…'; };
     }
@@ -132,6 +162,7 @@
       cfg.base = ($('#baseUrl').value || '').replace(/\/+$/,'');
       cfg.token = $('#adminToken').value.trim();
       cfg.eventId = $('#eventId').value.trim();
+      dups = []; // limpiar duplicados mostrados al recargar
       await loadAll();
       connectSSE();
     });
